@@ -5,7 +5,7 @@ This package owns no UI, email service, or application account data beyond its
 explicit identity tables. Version 0.1.0 APIs are not yet stable.
 
 ```sh
-pip install './extensions/wred-auth[sqlalchemy]' './extensions/wred-ratelimit[redis]'
+pip install 'wred-auth[sqlalchemy]' 'wred-ratelimit[redis]'
 ```
 
 ## Authorization without account storage
