@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import inspect
+import math
 import secrets
 import time
 import uuid
@@ -18,7 +19,7 @@ from cryptography.fernet import Fernet
 
 from .storage import StoreUnavailable
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 class AuthError(Exception):
@@ -69,6 +70,27 @@ def _password(value):
     if not isinstance(value, str) or not 15 <= len(value) <= 128:
         raise AuthError("Password must contain 15 to 128 characters", 422)
     return value
+
+
+async def _account_payload(request, maximum):
+    receive, size = request.receive, 0
+
+    async def limited_receive():
+        nonlocal size
+        message = await receive()
+        size += len(message.get("body", b""))
+        if size > maximum:
+            raise AuthError("Account request body too large", 413)
+        return message
+
+    request.receive = limited_receive
+    try:
+        body = await request.body()
+    finally:
+        request.receive = receive
+    if len(body) > maximum:
+        raise AuthError("Account request body too large", 413)
+    return await request.json()
 
 
 class JWTVerifier:
@@ -152,7 +174,16 @@ class Auth:
                 )
             if not public_url.startswith("https://"):
                 raise ValueError("Account public_url must use HTTPS")
-            if access_ttl <= 0 or refresh_ttl <= access_ttl:
+            if (
+                any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    for value in (access_ttl, refresh_ttl)
+                )
+                or access_ttl <= 0
+                or refresh_ttl <= access_ttl
+            ):
                 raise ValueError("Invalid token lifetimes")
             self.cipher = Fernet(encryption_key)
             self.hasher = PasswordHasher()
@@ -214,7 +245,7 @@ class Auth:
         return token
 
     async def _token(self, tx, token, kind, *, consume=True):
-        if not isinstance(token, str):
+        if not isinstance(token, str) or len(token) > 8192:
             raise AuthError()
         row = await tx.get("tokens", _hash(token))
         if (
@@ -420,7 +451,7 @@ class Auth:
         return result
 
     async def refresh(self, token):
-        if not isinstance(token, str):
+        if not isinstance(token, str) or len(token) > 8192:
             raise AuthError()
 
         async def rotate(tx):
@@ -491,7 +522,7 @@ class Auth:
 
     async def _request_principal(self, request):
         scheme, _, token = request.headers.get("authorization", "").partition(" ")
-        if scheme.lower() != "bearer" or not token or " " in token:
+        if scheme.lower() != "bearer" or not token or len(token) > 8192 or " " in token:
             raise AuthError()
         value = await self.authenticate(token)
         request.scope["wred.auth"] = value
@@ -688,6 +719,8 @@ class Auth:
         return {"recovery_codes": recovery, "detail": "MFA enabled; sign in again"}
 
     async def _consume_mfa(self, tx, account, code):
+        if not isinstance(code, str) or not code or len(code) > 8192:
+            raise AuthError("Invalid MFA code")
         hashed = _hash(code)
         if hashed in account["recovery"]:
             await tx.update(
@@ -847,6 +880,7 @@ class Auth:
         rule="10/minute",
         account_rule="5/minute",
         key=None,
+        max_body_bytes=64 * 1024,
     ):
         """Register JSON account endpoints with peer-IP and account-key throttles.
 
@@ -856,6 +890,8 @@ class Auth:
 
         if self.store is None or self.limiter is None:
             raise ValueError("Account routes require store and limiter")
+        if type(max_body_bytes) is not int or max_body_bytes < 1:
+            raise ValueError("max_body_bytes must be a positive integer")
         prefix = "/" + prefix.strip("/")
 
         async def dispatch(request, action, provider=None):
@@ -914,7 +950,11 @@ class Auth:
                         ],
                         200,
                     )
-                payload = {} if request.method == "GET" else await request.json()
+                payload = (
+                    {}
+                    if request.method == "GET"
+                    else await _account_payload(request, max_body_bytes)
+                )
                 if not isinstance(payload, dict):
                     raise AuthError("Expected a JSON object", 422)
                 # Bound inputs before parsing passwords/tokens and avoid logging them.
@@ -1088,12 +1128,28 @@ class Auth:
         return self
 
     async def aclose(self):
-        if self._password_tasks:
-            await asyncio.gather(*self._password_tasks, return_exceptions=True)
-        if self.store:
-            await self.store.aclose()
-        if self.limiter:
-            await self.limiter.aclose()
+        errors = []
+        try:
+            if self._password_tasks:
+                await asyncio.shield(
+                    asyncio.gather(*self._password_tasks, return_exceptions=True)
+                )
+        except asyncio.CancelledError as exc:
+            errors.append(exc)
+        for resource in (self.store, self.limiter):
+            if resource is not None:
+                try:
+                    await resource.aclose()
+                except (Exception, asyncio.CancelledError) as exc:
+                    # One failed cleanup must not strand another owned resource.
+                    errors.append(exc)
+        for error in errors:
+            if isinstance(error, asyncio.CancelledError):
+                raise error
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise ExceptionGroup("Auth shutdown failed", errors)
 
     async def __aenter__(self):
         return self

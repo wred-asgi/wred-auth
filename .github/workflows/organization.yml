@@ -1,0 +1,7 @@
+name: Organization contract
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  ecosystem:
+    uses: wred-asgi/.github/.github/workflows/extensions.yml@main

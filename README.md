@@ -1,6 +1,6 @@
 # wred-auth
 
-Bearer authorization and an opt-in account service for Wred 0.13–0.14. Python 3.11+.
+Bearer authorization and an opt-in account service for Wred 0.13–0.15. Python 3.11+.
 This package owns no UI, email service, or application account data beyond its
 explicit identity tables. Version 0.1.0 APIs are not yet stable.
 
@@ -294,7 +294,7 @@ Auth decorators preserve injected keyword arguments and OpenAPI metadata.
 Close `auth` during application shutdown with `await auth.aclose()`; it also closes
 the supplied limiter. Authentication, authorization, validation, and quota failures
 retain their HTTP statuses; the response adapter does not validate non-success payloads. All three extensions
-support Wred 0.13–0.14 together with their current dependency constraints.
+support Wred 0.13–0.15 together with their current dependency constraints.
 
 ## Tests
 
@@ -330,6 +330,20 @@ a production SLO or failover certification.
 
 ## Extension compatibility
 
-Follows the [Wred extension contract v1](https://github.com/wred-asgi/.github/blob/main/EXTENSIONS.md).
+Follows the [Wred extension contract v1.1](https://github.com/wred-asgi/.github/blob/main/EXTENSIONS.md).
 Keep `@app.route` outermost for
 route decorators; register routes on the inner Wred app when using ASGI wrappers.
+
+## Request resource limits
+
+`Auth.mount(..., max_body_bytes=64*1024)` caps account JSON bodies while reading
+chunks, before JSON parsing or password work, and also checks a previously cached
+body. Excess bodies return 413 with `Cache-Control: no-store`. Keep an ingress body
+limit too: an outer middleware can already have allocated a larger body. Bearer,
+refresh, and MFA challenge tokens are bounded to 8,192 characters. Token TTLs must
+be finite and positive. Tune password concurrency, shared quotas, database pools,
+and request deadlines together; see the organization [production guide](https://github.com/wred-asgi/.github/blob/main/PRODUCTION.md).
+
+Shutdown attempts both the owned store and limiter even if one close fails or is
+cancelled. Cancellation still propagates; multiple ordinary failures are grouped.
+A cancelled shutdown does not cancel the underlying password worker threads.
