@@ -1,6 +1,6 @@
 # wred-auth
 
-Bearer authorization and an opt-in account service for Wred 0.13. Python 3.11+.
+Bearer authorization and an opt-in account service for Wred 0.13–0.14. Python 3.11+.
 This package owns no UI, email service, or application account data beyond its
 explicit identity tables. Version 0.1.0 APIs are not yet stable.
 
@@ -294,7 +294,7 @@ Auth decorators preserve injected keyword arguments and OpenAPI metadata.
 Close `auth` during application shutdown with `await auth.aclose()`; it also closes
 the supplied limiter. Authentication, authorization, validation, and quota failures
 retain their HTTP statuses; the response adapter does not validate non-success payloads. All three extensions
-support Wred 0.13 together with their current dependency constraints.
+support Wred 0.13–0.14 together with their current dependency constraints.
 
 ## Tests
 
@@ -327,3 +327,9 @@ accounts in the supplied disposable database; MongoDB runs remove their uniquely
 named benchmark database. Tune `--workers`, `--concurrency`, `--password-jobs`,
 `--users`, and `--requests` for your workload. This is a local capacity probe, not
 a production SLO or failover certification.
+
+## Extension compatibility
+
+Follows the [Wred extension contract v1](https://github.com/wred-asgi/.github/blob/main/EXTENSIONS.md).
+Keep `@app.route` outermost for
+route decorators; register routes on the inner Wred app when using ASGI wrappers.
